@@ -4,7 +4,11 @@ import { verifySlackRequest } from '@/lib/slack/verify-request';
 /**
  * Process problem submission asynchronously and send result to Slack via response_url
  */
-async function processProblemSubmission(problemDescription: string, responseUrl: string) {
+async function processProblemSubmission(
+  problemDescription: string,
+  responseUrl: string,
+  userName?: string | null
+) {
   try {
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
     const apiResponse = await fetch(`${baseUrl}/api/problems/submit`, {
@@ -23,19 +27,43 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           response_type: 'ephemeral',
-          text: `❌ Error: ${apiData.error || apiData.details || 'Failed to process problem'}`
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `❌ *Error Processing Problem*\n\n${apiData.error || apiData.details || 'Failed to process problem'}`
+              }
+            }
+          ]
         })
       });
       return;
     }
 
     const matchResult = apiData.match;
+    const problemId = apiData.problem?.id;
+    const problemsPageUrl = `${baseUrl}/problems`;
+    
+    // Build header block with user info
+    const headerText = userName 
+      ? `*🔍 Problem Flagged by <@${userName}>*\n\n*Problem:*\n${problemDescription}`
+      : `*🔍 Problem Flagged*\n\n*Problem:*\n${problemDescription}`;
+
     const blocks: any[] = [
+      {
+        type: 'header',
+        text: {
+          type: 'plain_text',
+          text: '🚩 New Problem Submitted',
+          emoji: true
+        }
+      },
       {
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `*Problem Submitted:*\n${problemDescription}`
+          text: headerText
         }
       }
     ];
@@ -57,8 +85,41 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `✅ *Found a Matching Tool!*\n\n*${matchedTool.title}*\n${matchedTool.description}\n\n*Solves:* ${matchedTool.problem_solves}\n*For:* ${matchedTool.who_can_use}\n\n<${matchedTool.url}|Visit Tool →>`
+            text: `✅ *Solution Found!*\n\nWe found a tool that solves this problem:`
           }
+        });
+        blocks.push({
+          type: 'section',
+          fields: [
+            {
+              type: 'mrkdwn',
+              text: `*Tool:*\n<${matchedTool.url}|${matchedTool.title}>`
+            },
+            {
+              type: 'mrkdwn',
+              text: `*Status:*\n✅ Solved`
+            }
+          ]
+        });
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `*Description:*\n${matchedTool.description}`
+          }
+        });
+        blocks.push({
+          type: 'section',
+          fields: [
+            {
+              type: 'mrkdwn',
+              text: `*Solves:*\n${matchedTool.problem_solves}`
+            },
+            {
+              type: 'mrkdwn',
+              text: `*For:*\n${matchedTool.who_can_use}`
+            }
+          ]
         });
       }
     } else if (matchResult.status === 'suggested' && matchResult.suggestedTools) {
@@ -69,7 +130,7 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `💡 *Found ${matchResult.suggestedTools.length} Suggested Tool(s)*\n\nThese tools might solve your problem but need URLs to be added.`
+          text: `💡 *Potential Solutions Found*\n\nFound ${matchResult.suggestedTools.length} tool(s) that might solve this problem, but they need URLs to be added:`
         }
       });
       
@@ -78,7 +139,7 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
           type: 'section',
           text: {
             type: 'mrkdwn',
-            text: `*${tool.title}*\n${tool.description}\n*Solves:* ${tool.problem_solves}`
+            text: `*${tool.title}*\n${tool.description}\n\n*Solves:* ${tool.problem_solves}`
           }
         });
       });
@@ -90,10 +151,31 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
         type: 'section',
         text: {
           type: 'mrkdwn',
-          text: `🚀 *Opportunity Identified!*\n\nNo existing tool solves this exact problem. This is an opportunity - we will work on this!`
+          text: `🚀 *New Opportunity Identified!*\n\nNo existing tool solves this exact problem. This is a great opportunity for a new solution!`
+        }
+      });
+      blocks.push({
+        type: 'section',
+        text: {
+          type: 'mrkdwn',
+          text: `💡 *Next Steps:*\n• Research potential solutions\n• Evaluate feasibility\n• Add to development pipeline`
         }
       });
     }
+
+    // Add footer with link to view all problems
+    blocks.push({
+      type: 'divider'
+    });
+    blocks.push({
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `📋 <${problemsPageUrl}|View all problems> • Status: ${matchResult.status === 'solved' ? '✅ Solved' : matchResult.status === 'suggested' ? '⏳ Pending' : '🚀 Opportunity'}`
+        }
+      ]
+    });
 
     await fetch(responseUrl, {
       method: 'POST',
@@ -110,7 +192,15 @@ async function processProblemSubmission(problemDescription: string, responseUrl:
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         response_type: 'ephemeral',
-        text: '❌ An error occurred while processing your problem. Please try again later.'
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
+            }
+          }
+        ]
       })
     });
   }

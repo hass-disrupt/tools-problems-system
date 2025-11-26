@@ -166,24 +166,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Process asynchronously - don't await
-    // Use void to explicitly mark as fire-and-forget
-    void processToolAddition(url, responseUrl).catch(async (error) => {
-      console.error('Error in async tool processing:', error);
-      console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
-      // Send error via response_url
-      try {
-        await fetch(responseUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            response_type: 'ephemeral',
-            text: `❌ An error occurred while processing your tool: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again later.`
-          })
-        });
-      } catch (fetchError) {
-        console.error('Failed to send error response to Slack:', fetchError);
-      }
+    // Call separate API endpoint to process asynchronously
+    // This ensures it runs in a separate function context in Vercel
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
+    
+    // Fire and forget - don't await
+    fetch(`${baseUrl}/api/slack/process-tool`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, responseUrl }),
+    }).catch((error) => {
+      console.error('Failed to trigger async processing:', error);
+      // Try to send error to Slack
+      fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ An error occurred while processing your tool. Please try again later.'
+        })
+      }).catch(console.error);
     });
 
     // Return immediate response
