@@ -1,6 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
 
+/**
+ * Process tool addition asynchronously and send result to Slack via response_url
+ */
+async function processToolAddition(url: string, responseUrl: string) {
+  try {
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
+    const apiResponse = await fetch(`${baseUrl}/api/tools/add`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ url }),
+    });
+
+    const apiData = await apiResponse.json();
+
+    if (!apiResponse.ok) {
+      // Handle different error types
+      let errorMessage = 'Failed to add tool.';
+      
+      if (apiData.error?.includes('rejected')) {
+        errorMessage = `❌ Tool rejected: ${apiData.reason || apiData.details || apiData.error}`;
+      } else if (apiData.error?.includes('already exists') || apiData.code === '23505') {
+        errorMessage = `⚠️ Tool already exists in the database.`;
+      } else {
+        errorMessage = `❌ Error: ${apiData.error || apiData.details || 'Unknown error'}`;
+      }
+
+      await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: errorMessage
+        })
+      });
+      return;
+    }
+
+    // Success response
+    const tool = apiData.tool;
+    await fetch(responseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        response_type: 'in_channel',
+        blocks: [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: `✅ *Tool Added Successfully!*\n\n*${tool.title}*\n${tool.description}\n\n*Category:* ${tool.category}\n*Solves:* ${tool.problem_solves}\n*For:* ${tool.who_can_use}\n\n<${tool.url}|Visit Tool →>`
+            }
+          }
+        ]
+      })
+    });
+  } catch (error) {
+    console.error('Error processing tool addition:', error);
+    await fetch(responseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        response_type: 'ephemeral',
+        text: '❌ An error occurred while processing your tool. Please try again later.'
+      })
+    });
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Get the raw body for signature verification
@@ -72,53 +142,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call the internal API to add the tool
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
-    const apiResponse = await fetch(`${baseUrl}/api/tools/add`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url }),
-    });
-
-    const apiData = await apiResponse.json();
-
-    if (!apiResponse.ok) {
-      // Handle different error types
-      let errorMessage = 'Failed to add tool.';
-      
-      if (apiData.error?.includes('rejected')) {
-        errorMessage = `❌ Tool rejected: ${apiData.reason || apiData.details || apiData.error}`;
-      } else if (apiData.error?.includes('already exists')) {
-        errorMessage = `⚠️ Tool already exists in the database.`;
-      } else {
-        errorMessage = `❌ Error: ${apiData.error || apiData.details || 'Unknown error'}`;
-      }
-
+    // IMPORTANT: Return immediate response to Slack (within 3 seconds)
+    // Then process asynchronously and send result via response_url
+    if (!responseUrl) {
       return NextResponse.json(
         {
           response_type: 'ephemeral',
-          text: errorMessage
+          text: 'Error: Missing response URL'
         },
         { status: 200 }
       );
     }
 
-    // Success response
-    const tool = apiData.tool;
+    // Process asynchronously - don't await
+    processToolAddition(url, responseUrl).catch((error) => {
+      console.error('Error in async tool processing:', error);
+      // Send error via response_url
+      fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ An error occurred while processing your tool. Please try again later.'
+        })
+      }).catch(console.error);
+    });
+
+    // Return immediate response
     return NextResponse.json(
       {
-        response_type: 'in_channel',
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `✅ *Tool Added Successfully!*\n\n*${tool.title}*\n${tool.description}\n\n*Category:* ${tool.category}\n*Solves:* ${tool.problem_solves}\n*For:* ${tool.who_can_use}\n\n<${tool.url}|Visit Tool →>`
-            }
-          }
-        ]
+        response_type: 'ephemeral',
+        text: 'Got it! I\'m analyzing the URL and adding it to the database. This may take a few moments...'
       },
       { status: 200 }
     );

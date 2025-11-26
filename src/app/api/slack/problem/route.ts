@@ -1,65 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
 
-export async function POST(request: NextRequest) {
+/**
+ * Process problem submission asynchronously and send result to Slack via response_url
+ */
+async function processProblemSubmission(problemDescription: string, responseUrl: string) {
   try {
-    // Get the raw body for signature verification
-    const body = await request.text();
-    
-    // Parse form data
-    const formData = new URLSearchParams(body);
-    const command = formData.get('command');
-    const text = formData.get('text');
-    const responseUrl = formData.get('response_url');
-    const userId = formData.get('user_id');
-    const userName = formData.get('user_name');
-    
-    // Get Slack signing secret from environment
-    const signingSecret = process.env.SLACK_SIGNING_SECRET;
-    if (!signingSecret) {
-      console.error('SLACK_SIGNING_SECRET is not set');
-      return NextResponse.json(
-        { error: 'Server configuration error' },
-        { status: 500 }
-      );
-    }
-
-    // Verify request signature
-    const timestamp = request.headers.get('x-slack-request-timestamp') || '';
-    const signature = request.headers.get('x-slack-signature') || '';
-    
-    if (!verifySlackRequest(signingSecret, body, timestamp, signature)) {
-      return NextResponse.json(
-        { error: 'Invalid request signature' },
-        { status: 401 }
-      );
-    }
-
-    // Validate command
-    if (command !== '/problem') {
-      return NextResponse.json(
-        { 
-          response_type: 'ephemeral',
-          text: `Unknown command: ${command}` 
-        },
-        { status: 200 }
-      );
-    }
-
-    // Validate problem description
-    if (!text || text.trim().length === 0) {
-      return NextResponse.json(
-        {
-          response_type: 'ephemeral',
-          text: 'Please describe your problem. Usage: `/problem I need a tool to convert Figma designs to React components`'
-        },
-        { status: 200 }
-      );
-    }
-
-    const problemDescription = text.trim();
-
-    // Call the internal API to submit the problem
     const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
     const apiResponse = await fetch(`${baseUrl}/api/problems/submit`, {
       method: 'POST',
@@ -72,13 +18,15 @@ export async function POST(request: NextRequest) {
     const apiData = await apiResponse.json();
 
     if (!apiResponse.ok) {
-      return NextResponse.json(
-        {
+      await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           response_type: 'ephemeral',
           text: `❌ Error: ${apiData.error || apiData.details || 'Failed to process problem'}`
-        },
-        { status: 200 }
-      );
+        })
+      });
+      return;
     }
 
     const matchResult = apiData.match;
@@ -147,10 +95,116 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    return NextResponse.json(
-      {
+    await fetch(responseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         response_type: 'in_channel',
         blocks
+      })
+    });
+  } catch (error) {
+    console.error('Error processing problem submission:', error);
+    await fetch(responseUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        response_type: 'ephemeral',
+        text: '❌ An error occurred while processing your problem. Please try again later.'
+      })
+    });
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    // Get the raw body for signature verification
+    const body = await request.text();
+    
+    // Parse form data
+    const formData = new URLSearchParams(body);
+    const command = formData.get('command');
+    const text = formData.get('text');
+    const responseUrl = formData.get('response_url');
+    const userId = formData.get('user_id');
+    const userName = formData.get('user_name');
+    
+    // Get Slack signing secret from environment
+    const signingSecret = process.env.SLACK_SIGNING_SECRET;
+    if (!signingSecret) {
+      console.error('SLACK_SIGNING_SECRET is not set');
+      return NextResponse.json(
+        { error: 'Server configuration error' },
+        { status: 500 }
+      );
+    }
+
+    // Verify request signature
+    const timestamp = request.headers.get('x-slack-request-timestamp') || '';
+    const signature = request.headers.get('x-slack-signature') || '';
+    
+    if (!verifySlackRequest(signingSecret, body, timestamp, signature)) {
+      return NextResponse.json(
+        { error: 'Invalid request signature' },
+        { status: 401 }
+      );
+    }
+
+    // Validate command
+    if (command !== '/problem') {
+      return NextResponse.json(
+        { 
+          response_type: 'ephemeral',
+          text: `Unknown command: ${command}` 
+        },
+        { status: 200 }
+      );
+    }
+
+    // Validate problem description
+    if (!text || text.trim().length === 0) {
+      return NextResponse.json(
+        {
+          response_type: 'ephemeral',
+          text: 'Please describe your problem. Usage: `/problem I need a tool to convert Figma designs to React components`'
+        },
+        { status: 200 }
+      );
+    }
+
+    const problemDescription = text.trim();
+
+    // IMPORTANT: Return immediate response to Slack (within 3 seconds)
+    // Then process asynchronously and send result via response_url
+    if (!responseUrl) {
+      return NextResponse.json(
+        {
+          response_type: 'ephemeral',
+          text: 'Error: Missing response URL'
+        },
+        { status: 200 }
+      );
+    }
+
+    // Process asynchronously - don't await
+    processProblemSubmission(problemDescription, responseUrl).catch((error) => {
+      console.error('Error in async problem processing:', error);
+      // Send error via response_url
+      fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: '❌ An error occurred while processing your problem. Please try again later.'
+        })
+      }).catch(console.error);
+    });
+
+    // Return immediate response
+    return NextResponse.json(
+      {
+        response_type: 'ephemeral',
+        text: 'Got it! I\'m searching for tools that solve your problem. This may take a few moments...'
       },
       { status: 200 }
     );

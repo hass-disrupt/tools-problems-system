@@ -58,7 +58,11 @@ export async function POST(request: NextRequest) {
 
     if (existingTool) {
       return NextResponse.json(
-        { error: 'Tool with this URL already exists', toolId: existingTool.id },
+        { 
+          error: 'Tool with this URL already exists', 
+          toolId: existingTool.id,
+          code: '23505' // PostgreSQL duplicate key error code
+        },
         { status: 409 }
       );
     }
@@ -127,6 +131,17 @@ export async function POST(request: NextRequest) {
             details: 'The tools table does not exist. Run the SQL from supabase/migrations/001_create_tables.sql'
           },
           { status: 500 }
+        );
+      }
+      
+      // Check if it's a duplicate key error (race condition)
+      if (insertError.code === '23505' || insertError.message?.includes('duplicate key')) {
+        return NextResponse.json(
+          { 
+            error: 'Tool with this URL already exists',
+            code: '23505'
+          },
+          { status: 409 }
         );
       }
       
