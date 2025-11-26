@@ -16,6 +16,7 @@ export const maxDuration = 30;
 export async function POST(request: NextRequest) {
   let responseUrl: string | null = null;
   let problemDescription: string | undefined;
+  let progressTimeout: NodeJS.Timeout | undefined;
   
   try {
     console.log('[PROCESS-PROBLEM] Endpoint called - starting request processing');
@@ -51,9 +52,6 @@ export async function POST(request: NextRequest) {
     });
     
     const supabase = await createClient();
-    
-    // Declare progressTimeout outside try block so it can be cleared in catch
-    let progressTimeout: NodeJS.Timeout | undefined;
     
     // Send progress update after 8 seconds if still processing
     progressTimeout = setTimeout(async () => {
