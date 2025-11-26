@@ -1,6 +1,8 @@
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/server';
 
+export const dynamic = 'force-dynamic';
+
 interface Problem {
   id: string;
   description: string;
@@ -12,7 +14,7 @@ interface Problem {
     title: string;
     url: string;
     description: string;
-  } | null;
+  }[] | null;
 }
 
 async function getProblems() {
@@ -41,7 +43,17 @@ async function getProblems() {
       return [];
     }
 
-    return (problems || []) as Problem[];
+    // Transform the data to handle Supabase's array return for foreign keys
+    const transformedProblems: Problem[] = (problems || []).map((p: any) => ({
+      id: p.id,
+      description: p.description,
+      status: p.status,
+      matched_tool_id: p.matched_tool_id,
+      created_at: p.created_at,
+      tools: Array.isArray(p.tools) && p.tools.length > 0 ? p.tools : null,
+    }));
+
+    return transformedProblems;
   } catch (error) {
     console.error('Error fetching problems:', error);
     return [];
@@ -173,7 +185,7 @@ export default async function ProblemsPage() {
                   </div>
                 </div>
 
-                {problem.tools && (
+                {problem.tools && problem.tools.length > 0 && (
                   <div className="mt-4 pt-4 border-t border-zinc-200 dark:border-zinc-800">
                     <div className="flex items-start gap-3">
                       <div className="flex-1">
@@ -181,16 +193,16 @@ export default async function ProblemsPage() {
                           Matched Tool:
                         </h4>
                         <a
-                          href={problem.tools.url}
+                          href={problem.tools[0].url}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="text-blue-600 dark:text-blue-400 hover:underline font-medium"
                         >
-                          {problem.tools.title} →
+                          {problem.tools[0].title} →
                         </a>
-                        {problem.tools.description && (
+                        {problem.tools[0].description && (
                           <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-1">
-                            {problem.tools.description}
+                            {problem.tools[0].description}
                           </p>
                         )}
                       </div>
