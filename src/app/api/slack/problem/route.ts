@@ -73,40 +73,81 @@ export async function POST(request: NextRequest) {
 
     // Call separate API endpoint to process asynchronously
     // This ensures it runs in a separate function context in Vercel
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 
-      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
-      'https://tools-problems-system.vercel.app';
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
+    const processUrl = `${baseUrl}/api/slack/process-problem`;
     
-    // Fire and forget - don't await
-    fetch(`${baseUrl}/api/slack/process-problem`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ 
-        problemDescription, 
-        responseUrl, 
-        userId, 
-        userName 
-      }),
-    }).catch((error) => {
-      console.error('Failed to trigger async processing:', error);
-      // Try to send error to Slack
-      fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          response_type: 'ephemeral',
-          blocks: [
-            {
-              type: 'section',
-              text: {
-                type: 'mrkdwn',
-                text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
-              }
-            }
-          ]
-        })
-      }).catch(console.error);
+    console.log('Triggering async problem processing:', {
+      baseUrl,
+      processUrl,
+      problemDescription: problemDescription.substring(0, 50) + '...',
+      hasResponseUrl: !!responseUrl,
+      userId,
+      userName
     });
+    
+    // Create the fetch promise and ensure it's initiated
+    // Use void to explicitly mark as fire-and-forget
+    void (async () => {
+      try {
+        console.log('Initiating fetch to process-problem endpoint...');
+        const response = await fetch(processUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            problemDescription, 
+            responseUrl, 
+            userId, 
+            userName 
+          }),
+        });
+        
+        if (!response.ok) {
+          const errorText = await response.text();
+          console.error('Process-problem endpoint returned error:', {
+            status: response.status,
+            statusText: response.statusText,
+            body: errorText,
+            processUrl
+          });
+        } else {
+          console.log('Process-problem endpoint called successfully:', {
+            status: response.status,
+            processUrl
+          });
+        }
+      } catch (error) {
+        console.error('Failed to trigger async processing:', {
+          error,
+          message: error instanceof Error ? error.message : 'Unknown error',
+          stack: error instanceof Error ? error.stack : undefined,
+          processUrl,
+          problemDescription: problemDescription.substring(0, 50)
+        });
+        // Try to send error to Slack
+        try {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              blocks: [
+                {
+                  type: 'section',
+                  text: {
+                    type: 'mrkdwn',
+                    text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
+                  }
+                }
+              ]
+            })
+          });
+        } catch (slackError) {
+          console.error('Failed to send error notification to Slack:', slackError);
+        }
+      }
+    })();
+    
+    console.log('Async processing triggered (fire-and-forget), returning response to Slack');
 
     // Return immediate response
     return NextResponse.json(

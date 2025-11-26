@@ -10,18 +10,36 @@ export async function POST(request: NextRequest) {
   let responseUrl: string | null = null;
   
   try {
+    console.log('[PROCESS-PROBLEM] Endpoint called - starting request processing');
+    
     const body = await request.json();
+    console.log('[PROCESS-PROBLEM] Request body received:', {
+      hasProblemDescription: !!body.problemDescription,
+      hasResponseUrl: !!body.responseUrl,
+      hasUserId: !!body.userId,
+      hasUserName: !!body.userName,
+      problemDescriptionPreview: body.problemDescription?.substring(0, 50)
+    });
+    
     const { problemDescription, responseUrl: urlFromBody, userId, userName } = body;
     responseUrl = urlFromBody;
 
     if (!problemDescription || !responseUrl) {
+      console.error('[PROCESS-PROBLEM] Missing required fields:', {
+        hasProblemDescription: !!problemDescription,
+        hasResponseUrl: !!responseUrl
+      });
       return NextResponse.json(
         { error: 'Missing problemDescription or responseUrl' },
         { status: 400 }
       );
     }
 
-    console.log('Processing problem submission:', { problemDescription, userId, userName });
+    console.log('[PROCESS-PROBLEM] Processing problem submission:', { 
+      problemDescription: problemDescription.substring(0, 100), 
+      userId, 
+      userName 
+    });
     
     const supabase = await createClient();
     
