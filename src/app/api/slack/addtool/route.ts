@@ -1,120 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
-import { addTool } from '@/lib/tools/add-tool';
+import { send } from '@vercel/queue';
 
-/**
- * Process tool addition asynchronously and send result to Slack via response_url
- */
-async function processToolAddition(url: string, responseUrl: string) {
-  console.log('Starting async tool addition process for URL:', url);
-  try {
-    // Call the internal function directly instead of HTTP request
-    const result = await addTool(url);
-    console.log('Tool addition result:', result.success ? 'Success' : 'Failed');
-
-    if (!result.success) {
-      // Handle different error types
-      let errorMessage = 'Failed to add tool.';
-      let useBlocks = false;
-      let blocks: any[] = [];
-      
-      if (result.error?.includes('rejected')) {
-        errorMessage = `❌ Tool rejected: ${result.reason || result.details || result.error}`;
-      } else if (result.error?.includes('already exists') || result.code === '23505') {
-        // Fun message for duplicate tools
-        const existingTool = result.tool;
-        const toolTitle = existingTool?.title || 'this tool';
-        const createdDate = existingTool?.created_at 
-          ? new Date(existingTool.created_at).toLocaleDateString('en-US', { 
-              month: 'long', 
-              day: 'numeric', 
-              year: 'numeric' 
-            })
-          : 'previously';
-        
-        const funMessages = [
-          `🎯 *Nice try!* Someone else already added ${toolTitle} on ${createdDate}. Great minds think alike! 🧠✨`,
-          `🔄 *Oops!* ${toolTitle} was already added on ${createdDate}. You're not the first to discover this gem! 💎`,
-          `👀 *Already in the collection!* Someone beat you to adding ${toolTitle} on ${createdDate}. But hey, you've got great taste! 👏`,
-          `🎪 *Plot twist!* ${toolTitle} is already in our database (added ${createdDate}). You're clearly on the right track! 🚀`,
-          `🎨 *Duplicate detected!* ${toolTitle} was added on ${createdDate}. No worries - you're still awesome for trying! 🌟`
-        ];
-        
-        const randomMessage = funMessages[Math.floor(Math.random() * funMessages.length)];
-        
-        useBlocks = true;
-        blocks = [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: randomMessage
-            }
-          }
-        ];
-        errorMessage = randomMessage; // Fallback for text
-      } else {
-        errorMessage = `❌ Error: ${result.error || result.details || 'Unknown error'}`;
-      }
-
-      const slackResponse = await fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          response_type: 'ephemeral',
-          ...(useBlocks ? { blocks } : { text: errorMessage })
-        })
-      });
-      
-      if (!slackResponse.ok) {
-        console.error('Failed to send error response to Slack:', await slackResponse.text());
-      }
-      return;
-    }
-
-    // Success response
-    const tool = result.tool;
-    console.log('Sending success response to Slack via response_url');
-    
-    const slackResponse = await fetch(responseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        response_type: 'in_channel',
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: `🎉 *You are awesome! Thanks for adding this tool!* Looks pretty cool! ✨\n\n*${tool.title}*\n${tool.description}\n\n*Category:* ${tool.category}\n*Solves:* ${tool.problem_solves}\n*For:* ${tool.who_can_use}\n\n<${tool.url}|Visit Tool →>`
-            }
-          }
-        ]
-      })
-    });
-    
-    if (!slackResponse.ok) {
-      console.error('Failed to send response to Slack:', await slackResponse.text());
-    } else {
-      console.log('Successfully sent response to Slack');
-    }
-  } catch (error) {
-    console.error('Error processing tool addition:', error);
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
-    try {
-      await fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          response_type: 'ephemeral',
-          text: `❌ An error occurred while processing your tool: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again later.`
-        })
-      });
-    } catch (fetchError) {
-      console.error('Failed to send error response to Slack:', fetchError);
-    }
-  }
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -199,55 +86,38 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call separate API endpoint to process asynchronously
-    // This ensures it runs in a separate function context in Vercel
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
+    // Send message to queue for reliable background processing
+    console.log('[ADDTOOL] Sending message to process-tool queue:', {
+      url,
+      hasResponseUrl: !!responseUrl
+    });
     
-    // Fire and forget - don't await, but ensure error handling
-    void (async () => {
+    try {
+      await send('process-tool', {
+        url,
+        responseUrl
+      });
+      console.log('[ADDTOOL] Message successfully sent to process-tool queue');
+    } catch (queueError) {
+      console.error('[ADDTOOL] Failed to send message to queue:', {
+        error: queueError,
+        message: queueError instanceof Error ? queueError.message : 'Unknown error',
+        stack: queueError instanceof Error ? queueError.stack : undefined
+      });
+      // Try to send error to Slack if queue send fails
       try {
-        const processResponse = await fetch(`${baseUrl}/api/slack/process-tool`, {
+        await fetch(responseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, responseUrl }),
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: '❌ An error occurred while processing your tool. Please try again later.'
+          })
         });
-        
-        if (!processResponse.ok) {
-          const errorText = await processResponse.text();
-          console.error('Process-tool endpoint returned error:', {
-            status: processResponse.status,
-            statusText: processResponse.statusText,
-            body: errorText
-          });
-          // Send error to Slack
-          await fetch(responseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              response_type: 'ephemeral',
-              text: '❌ An error occurred while processing your tool. Please try again later.'
-            })
-          }).catch((slackError) => {
-            console.error('Failed to send error response to Slack:', slackError);
-          });
-        }
-      } catch (error) {
-        console.error('Failed to trigger async processing:', error);
-        // Try to send error to Slack
-        try {
-          await fetch(responseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              response_type: 'ephemeral',
-              text: '❌ An error occurred while processing your tool. Please try again later.'
-            })
-          });
-        } catch (slackError) {
-          console.error('Failed to send error response to Slack:', slackError);
-        }
+      } catch (slackError) {
+        console.error('[ADDTOOL] Failed to send error notification to Slack:', slackError);
       }
-    })();
+    }
 
     // Return immediate response
     return NextResponse.json(

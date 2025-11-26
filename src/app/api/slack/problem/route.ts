@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
+import { send } from '@vercel/queue';
 
 export async function POST(request: NextRequest) {
   try {
@@ -71,104 +72,50 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Call separate API endpoint to process asynchronously
-    // This ensures it runs in a separate function context in Vercel
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
-    const processUrl = `${baseUrl}/api/slack/process-problem`;
-    
-    console.log('Triggering async problem processing:', {
-      baseUrl,
-      processUrl,
+    // Send message to queue for reliable background processing
+    console.log('[PROBLEM] Sending message to process-problem queue:', {
       problemDescription: problemDescription.substring(0, 50) + '...',
       hasResponseUrl: !!responseUrl,
       userId,
       userName
     });
     
-    // Create the fetch promise and ensure it's initiated
-    // Use void to explicitly mark as fire-and-forget
-    void (async () => {
+    try {
+      await send('process-problem', {
+        problemDescription,
+        responseUrl,
+        userId,
+        userName
+      });
+      console.log('[PROBLEM] Message successfully sent to process-problem queue');
+    } catch (queueError) {
+      console.error('[PROBLEM] Failed to send message to queue:', {
+        error: queueError,
+        message: queueError instanceof Error ? queueError.message : 'Unknown error',
+        stack: queueError instanceof Error ? queueError.stack : undefined
+      });
+      // Try to send error to Slack if queue send fails
       try {
-        console.log('Initiating fetch to process-problem endpoint...');
-        const response = await fetch(processUrl, {
+        await fetch(responseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            problemDescription, 
-            responseUrl, 
-            userId, 
-            userName 
-          }),
-        });
-        
-        if (!response.ok) {
-          const errorText = await response.text();
-          console.error('[PROBLEM] Process-problem endpoint returned error:', {
-            status: response.status,
-            statusText: response.statusText,
-            body: errorText,
-            processUrl
-          });
-          // Send error to Slack if process-problem endpoint failed
-          try {
-            await fetch(responseUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                response_type: 'ephemeral',
-                blocks: [
-                  {
-                    type: 'section',
-                    text: {
-                      type: 'mrkdwn',
-                      text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
-                    }
-                  }
-                ]
-              })
-            });
-          } catch (slackError) {
-            console.error('[PROBLEM] Failed to send error notification to Slack:', slackError);
-          }
-        } else {
-          console.log('[PROBLEM] Process-problem endpoint called successfully:', {
-            status: response.status,
-            processUrl
-          });
-        }
-      } catch (error) {
-        console.error('Failed to trigger async processing:', {
-          error,
-          message: error instanceof Error ? error.message : 'Unknown error',
-          stack: error instanceof Error ? error.stack : undefined,
-          processUrl,
-          problemDescription: problemDescription.substring(0, 50)
-        });
-        // Try to send error to Slack
-        try {
-          await fetch(responseUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              response_type: 'ephemeral',
-              blocks: [
-                {
-                  type: 'section',
-                  text: {
-                    type: 'mrkdwn',
-                    text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
-                  }
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            blocks: [
+              {
+                type: 'section',
+                text: {
+                  type: 'mrkdwn',
+                  text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
                 }
-              ]
-            })
-          });
-        } catch (slackError) {
-          console.error('Failed to send error notification to Slack:', slackError);
-        }
+              }
+            ]
+          })
+        });
+      } catch (slackError) {
+        console.error('[PROBLEM] Failed to send error notification to Slack:', slackError);
       }
-    })();
-    
-    console.log('Async processing triggered (fire-and-forget), returning response to Slack');
+    }
 
     // Return immediate response
     return NextResponse.json(

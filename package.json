@@ -12,6 +12,7 @@
     "@slack/bolt": "^4.6.0",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.85.0",
+    "@vercel/queue": "^0.0.0-alpha.32",
     "crypto": "^1.0.1",
     "next": "16.0.4",
     "openai": "^6.9.1",

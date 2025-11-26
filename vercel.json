@@ -1,0 +1,23 @@
+{
+  "functions": {
+    "src/app/api/queue/process-problem/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v1beta",
+          "topic": "process-problem",
+          "consumer": "processor"
+        }
+      ]
+    },
+    "src/app/api/queue/process-tool/route.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v1beta",
+          "topic": "process-tool",
+          "consumer": "processor"
+        }
+      ]
+    }
+  }
+}
+
