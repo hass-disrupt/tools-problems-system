@@ -7,13 +7,35 @@ import { addTool } from '@/lib/tools/add-tool';
  */
 export async function POST(request: NextRequest) {
   let responseUrl: string | null = null;
+  let url: string | undefined;
   
   try {
     const body = await request.json();
-    const { url, responseUrl: urlFromBody } = body;
-    responseUrl = urlFromBody;
+    url = body.url;
+    responseUrl = body.responseUrl;
 
     if (!url || !responseUrl) {
+      console.error('[PROCESS-TOOL] Missing required fields:', {
+        hasUrl: !!url,
+        hasResponseUrl: !!responseUrl
+      });
+      
+      // Try to send error to Slack if we have responseUrl
+      if (responseUrl) {
+        try {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: '❌ Error: Missing required information. Please try again.'
+            })
+          });
+        } catch (slackError) {
+          console.error('[PROCESS-TOOL] Failed to send error to Slack:', slackError);
+        }
+      }
+      
       return NextResponse.json(
         { error: 'Missing url or responseUrl' },
         { status: 400 }
@@ -81,10 +103,16 @@ export async function POST(request: NextRequest) {
       });
       
       if (!slackResponse.ok) {
-        console.error('Failed to send error response to Slack:', await slackResponse.text());
+        const errorText = await slackResponse.text();
+        console.error('[PROCESS-TOOL] Failed to send error response to Slack:', {
+          status: slackResponse.status,
+          statusText: slackResponse.statusText,
+          body: errorText
+        });
       }
       
-      return NextResponse.json({ success: false, error: errorMessage });
+      // Always return a response to the caller
+      return NextResponse.json({ success: false, error: errorMessage }, { status: 200 });
     }
 
     // Success response
@@ -109,34 +137,56 @@ export async function POST(request: NextRequest) {
     });
     
     if (!slackResponse.ok) {
-      console.error('Failed to send response to Slack:', await slackResponse.text());
-      return NextResponse.json({ success: false, error: 'Failed to send response to Slack' });
+      const errorText = await slackResponse.text();
+      console.error('[PROCESS-TOOL] Failed to send response to Slack:', {
+        status: slackResponse.status,
+        statusText: slackResponse.statusText,
+        body: errorText
+      });
+      // Still return success since tool was added, just Slack notification failed
+      return NextResponse.json({ 
+        success: true, 
+        tool,
+        warning: 'Tool added but failed to notify Slack'
+      }, { status: 200 });
     }
     
-    console.log('Successfully sent response to Slack');
-    return NextResponse.json({ success: true, tool });
+    console.log('[PROCESS-TOOL] Successfully sent response to Slack');
+    return NextResponse.json({ success: true, tool }, { status: 200 });
   } catch (error) {
-    console.error('Error processing tool addition:', error);
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+    console.error('[PROCESS-TOOL] Error processing tool addition:', error);
+    console.error('[PROCESS-TOOL] Error stack:', error instanceof Error ? error.stack : 'No stack');
     
-    // Try to send error to Slack if responseUrl is available
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    
+    // Always try to send error to Slack if responseUrl is available
     if (responseUrl) {
       try {
-        await fetch(responseUrl, {
+        const slackResponse = await fetch(responseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             response_type: 'ephemeral',
-            text: `❌ An error occurred while processing your tool: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again later.`
+            text: `❌ An error occurred while processing your tool: ${errorMessage}. Please try again later.`
           })
         });
+        
+        if (!slackResponse.ok) {
+          console.error('[PROCESS-TOOL] Failed to send error response to Slack:', {
+            status: slackResponse.status,
+            statusText: slackResponse.statusText
+          });
+        }
       } catch (fetchError) {
-        console.error('Failed to send error response to Slack:', fetchError);
+        console.error('[PROCESS-TOOL] Exception while sending error response to Slack:', fetchError);
       }
+    } else {
+      console.error('[PROCESS-TOOL] No responseUrl available to send error notification');
     }
     
+    // Always return a response, even on error
     return NextResponse.json(
-      { success: false, error: error instanceof Error ? error.message : 'Unknown error' },
+      { success: false, error: errorMessage },
       { status: 500 }
     );
   }

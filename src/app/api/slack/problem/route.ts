@@ -103,14 +103,35 @@ export async function POST(request: NextRequest) {
         
         if (!response.ok) {
           const errorText = await response.text();
-          console.error('Process-problem endpoint returned error:', {
+          console.error('[PROBLEM] Process-problem endpoint returned error:', {
             status: response.status,
             statusText: response.statusText,
             body: errorText,
             processUrl
           });
+          // Send error to Slack if process-problem endpoint failed
+          try {
+            await fetch(responseUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                response_type: 'ephemeral',
+                blocks: [
+                  {
+                    type: 'section',
+                    text: {
+                      type: 'mrkdwn',
+                      text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
+                    }
+                  }
+                ]
+              })
+            });
+          } catch (slackError) {
+            console.error('[PROBLEM] Failed to send error notification to Slack:', slackError);
+          }
         } else {
-          console.log('Process-problem endpoint called successfully:', {
+          console.log('[PROBLEM] Process-problem endpoint called successfully:', {
             status: response.status,
             processUrl
           });
@@ -158,7 +179,10 @@ export async function POST(request: NextRequest) {
       { status: 200 }
     );
   } catch (error) {
-    console.error('Error processing Slack command:', error);
+    console.error('[PROBLEM] Error processing Slack command:', error);
+    console.error('[PROBLEM] Error stack:', error instanceof Error ? error.stack : 'No stack');
+    
+    // Always return a response, even on error
     return NextResponse.json(
       {
         response_type: 'ephemeral',

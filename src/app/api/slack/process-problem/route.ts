@@ -39,6 +39,23 @@ export async function POST(request: NextRequest) {
         hasProblemDescription: !!problemDescription,
         hasResponseUrl: !!responseUrl
       });
+      
+      // Try to send error to Slack if we have responseUrl
+      if (responseUrl) {
+        try {
+          await fetch(responseUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              response_type: 'ephemeral',
+              text: '❌ Error: Missing required information. Please try again.'
+            })
+          });
+        } catch (slackError) {
+          console.error('[PROCESS-PROBLEM] Failed to send error to Slack:', slackError);
+        }
+      }
+      
       return NextResponse.json(
         { error: 'Missing problemDescription or responseUrl' },
         { status: 400 }
@@ -149,7 +166,7 @@ export async function POST(request: NextRequest) {
       });
       
       try {
-        await fetch(responseUrl, {
+        const slackResponse = await fetch(responseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -165,14 +182,26 @@ export async function POST(request: NextRequest) {
             ]
           })
         });
+        
+        if (!slackResponse.ok) {
+          console.error('[PROCESS-PROBLEM] Failed to send error response to Slack:', {
+            status: slackResponse.status,
+            statusText: slackResponse.statusText
+          });
+        }
       } catch (slackError) {
-        console.error('Failed to send error response to Slack:', {
+        console.error('[PROCESS-PROBLEM] Exception while sending error response to Slack:', {
           error: slackError,
           message: slackError instanceof Error ? slackError.message : 'Unknown error'
         });
       }
       
-      return NextResponse.json({ success: false, error: 'Database insertion failed', insertError });
+      // Always return a response, even on database error
+      return NextResponse.json({ 
+        success: false, 
+        error: 'Database insertion failed', 
+        insertError: insertError.message 
+      }, { status: 500 });
     }
 
     if (!newProblem) {
@@ -414,7 +443,8 @@ export async function POST(request: NextRequest) {
       // Don't throw - problem was successfully saved, just Slack notification failed
     }
     
-    return NextResponse.json({ success: true, problem: newProblem, match: matchResult });
+      // Always return a response
+      return NextResponse.json({ success: true, problem: newProblem, match: matchResult }, { status: 200 });
   } catch (error) {
     // Clear progress timeout if still pending
     if (typeof progressTimeout !== 'undefined') {
@@ -479,10 +509,11 @@ export async function POST(request: NextRequest) {
       }
     }
     
-    return NextResponse.json(
-      { success: false, error: errorMessage, problemSaved },
-      { status: 500 }
-    );
+      // Always return a response, even on error
+      return NextResponse.json(
+        { success: false, error: errorMessage, problemSaved },
+        { status: 500 }
+      );
   }
 }
 
