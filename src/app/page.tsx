@@ -1,63 +1,131 @@
-import Image from "next/image";
+import Link from 'next/link';
+import ToolCard from '@/components/ToolCard';
+import { createClient } from '@/lib/supabase/server';
 
-export default function Home() {
+async function getRecentTools() {
+  try {
+    const supabase = await createClient();
+    const { data: tools, error } = await supabase
+      .from('tools')
+      .select('id, url, title, description, tag, category, problem_solves, who_can_use, created_at')
+      .order('created_at', { ascending: false })
+      .limit(6);
+    
+    if (error) {
+      console.error('Error fetching tools:', {
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+        code: error.code,
+      });
+      // If table doesn't exist, return empty array gracefully
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        console.warn('Tools table does not exist. Please run the database migration.');
+        return [];
+      }
+      return [];
+    }
+    
+    return tools || [];
+  } catch (error) {
+    console.error('Error fetching tools:', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    return [];
+  }
+}
+
+export default async function Home() {
+  const recentTools = await getRecentTools();
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <div className="min-h-screen bg-zinc-50 dark:bg-black">
+      <main className="max-w-7xl mx-auto px-4 py-12">
+        {/* Header */}
+        <div className="mb-12">
+          <h1 className="text-4xl font-bold text-zinc-900 dark:text-zinc-50 mb-4">
+            Tools & Problems System
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="text-lg text-zinc-600 dark:text-zinc-400 mb-8">
+            Find tools that solve specific problems, or submit a problem to discover solutions.
           </p>
+
+          {/* Action Buttons */}
+          <div className="flex flex-col sm:flex-row gap-4">
+            <Link
+              href="/add-tool"
+              className="flex items-center justify-center px-6 py-3 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+            >
+              Add a Tool
+            </Link>
+            <Link
+              href="/add-problem"
+              className="flex items-center justify-center px-6 py-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Submit a Problem
+            </Link>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Recent Tools */}
+        <div>
+          <h2 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
+            Recent Tools
+          </h2>
+          
+          {recentTools.length === 0 ? (
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-12 text-center">
+              <p className="text-zinc-600 dark:text-zinc-400 mb-4">
+                No tools yet. Add your first tool to get started!
+              </p>
+              <Link
+                href="/add-tool"
+                className="inline-block px-6 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+              >
+                Add a Tool
+              </Link>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {recentTools.map((tool: any) => (
+                <ToolCard key={tool.id} tool={tool} />
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* How It Works */}
+        <div className="mt-16 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg p-8">
+          <h2 className="text-2xl font-semibold text-zinc-900 dark:text-zinc-50 mb-6">
+            How It Works
+          </h2>
+          <div className="grid md:grid-cols-3 gap-6">
+            <div>
+              <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                1. Add Tools
+              </h3>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                Submit a URL and our AI will extract detailed information about the tool, including what specific problem it solves.
+              </p>
+            </div>
+            <div>
+              <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                2. Submit Problems
+              </h3>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                Describe your problem precisely. We'll search for tools that solve your exact problem.
+              </p>
+            </div>
+            <div>
+              <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">
+                3. Get Solutions
+              </h3>
+              <p className="text-zinc-600 dark:text-zinc-400">
+                We'll match you with existing tools, suggest new ones, or identify opportunities for new solutions.
+              </p>
+            </div>
+          </div>
         </div>
       </main>
     </div>
