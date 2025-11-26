@@ -15,11 +15,44 @@ async function processToolAddition(url: string, responseUrl: string) {
     if (!result.success) {
       // Handle different error types
       let errorMessage = 'Failed to add tool.';
+      let useBlocks = false;
+      let blocks: any[] = [];
       
       if (result.error?.includes('rejected')) {
         errorMessage = `❌ Tool rejected: ${result.reason || result.details || result.error}`;
       } else if (result.error?.includes('already exists') || result.code === '23505') {
-        errorMessage = `⚠️ Tool already exists in the database.`;
+        // Fun message for duplicate tools
+        const existingTool = result.tool;
+        const toolTitle = existingTool?.title || 'this tool';
+        const createdDate = existingTool?.created_at 
+          ? new Date(existingTool.created_at).toLocaleDateString('en-US', { 
+              month: 'long', 
+              day: 'numeric', 
+              year: 'numeric' 
+            })
+          : 'previously';
+        
+        const funMessages = [
+          `🎯 *Nice try!* Someone else already added ${toolTitle} on ${createdDate}. Great minds think alike! 🧠✨`,
+          `🔄 *Oops!* ${toolTitle} was already added on ${createdDate}. You're not the first to discover this gem! 💎`,
+          `👀 *Already in the collection!* Someone beat you to adding ${toolTitle} on ${createdDate}. But hey, you've got great taste! 👏`,
+          `🎪 *Plot twist!* ${toolTitle} is already in our database (added ${createdDate}). You're clearly on the right track! 🚀`,
+          `🎨 *Duplicate detected!* ${toolTitle} was added on ${createdDate}. No worries - you're still awesome for trying! 🌟`
+        ];
+        
+        const randomMessage = funMessages[Math.floor(Math.random() * funMessages.length)];
+        
+        useBlocks = true;
+        blocks = [
+          {
+            type: 'section',
+            text: {
+              type: 'mrkdwn',
+              text: randomMessage
+            }
+          }
+        ];
+        errorMessage = randomMessage; // Fallback for text
       } else {
         errorMessage = `❌ Error: ${result.error || result.details || 'Unknown error'}`;
       }
@@ -29,7 +62,7 @@ async function processToolAddition(url: string, responseUrl: string) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           response_type: 'ephemeral',
-          text: errorMessage
+          ...(useBlocks ? { blocks } : { text: errorMessage })
         })
       });
       

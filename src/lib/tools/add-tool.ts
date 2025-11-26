@@ -44,7 +44,7 @@ export async function addTool(url: string): Promise<AddToolResult> {
     // Check if tool already exists
     const { data: existingTool, error: checkError } = await supabase
       .from('tools')
-      .select('id')
+      .select('id, title, created_at')
       .eq('url', url)
       .single();
 
@@ -62,6 +62,7 @@ export async function addTool(url: string): Promise<AddToolResult> {
         success: false,
         error: 'Tool with this URL already exists',
         code: '23505',
+        tool: existingTool, // Include existing tool info for fun message
       };
     }
 
