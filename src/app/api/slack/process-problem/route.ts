@@ -3,11 +3,19 @@ import { matchProblemToTools } from '@/lib/matching/match-problem';
 import { createClient } from '@/lib/supabase/server';
 
 /**
+ * Extended timeout for OpenAI API calls
+ * Vercel Hobby: max 10s, Pro: max 60s
+ * Setting to 30s to allow for OpenAI processing time
+ */
+export const maxDuration = 30;
+
+/**
  * Separate endpoint to process problem submission asynchronously
  * Called from the Slack handler to ensure it runs in a separate function context
  */
 export async function POST(request: NextRequest) {
   let responseUrl: string | null = null;
+  let problemDescription: string | undefined;
   
   try {
     console.log('[PROCESS-PROBLEM] Endpoint called - starting request processing');
@@ -21,7 +29,8 @@ export async function POST(request: NextRequest) {
       problemDescriptionPreview: body.problemDescription?.substring(0, 50)
     });
     
-    const { problemDescription, responseUrl: urlFromBody, userId, userName } = body;
+    const { problemDescription: desc, responseUrl: urlFromBody, userId, userName } = body;
+    problemDescription = desc;
     responseUrl = urlFromBody;
 
     if (!problemDescription || !responseUrl) {
@@ -43,25 +52,71 @@ export async function POST(request: NextRequest) {
     
     const supabase = await createClient();
     
-    // Run matching logic
-    console.log('Starting problem matching...');
+    // Declare progressTimeout outside try block so it can be cleared in catch
+    let progressTimeout: NodeJS.Timeout | undefined;
+    
+    // Send progress update after 8 seconds if still processing
+    progressTimeout = setTimeout(async () => {
+      try {
+        console.log('[PROCESS-PROBLEM] Sending progress update to Slack (processing taking longer than expected)');
+        await fetch(responseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: '⏳ Still processing your problem... This may take a bit longer as we search for the best solutions.'
+          })
+        });
+      } catch (progressError) {
+        console.error('[PROCESS-PROBLEM] Failed to send progress update:', progressError);
+      }
+    }, 8000);
+    
+    // Run matching logic with timeout handling
+    console.log('[PROCESS-PROBLEM] Starting problem matching...');
     let matchResult;
+    const matchingTimeout = 25000; // 25 seconds timeout for matching (leaving 5s buffer)
+    
     try {
-      matchResult = await matchProblemToTools(problemDescription.trim());
-      console.log('Matching completed successfully:', {
+      // Wrap matching in a timeout promise
+      const matchingPromise = matchProblemToTools(problemDescription.trim());
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Matching timeout: OpenAI API calls took too long')), matchingTimeout);
+      });
+      
+      matchResult = await Promise.race([matchingPromise, timeoutPromise]);
+      
+      clearTimeout(progressTimeout); // Clear progress update if matching completes
+      
+      console.log('[PROCESS-PROBLEM] Matching completed successfully:', {
         status: matchResult.status,
         matchedToolId: matchResult.matchedToolId,
         suggestedToolsCount: matchResult.suggestedTools?.length || 0,
         message: matchResult.message
       });
     } catch (matchError) {
-      console.error('Error during problem matching:', {
+      clearTimeout(progressTimeout); // Clear progress update on error
+      
+      const isTimeout = matchError instanceof Error && matchError.message.includes('timeout');
+      
+      console.error('[PROCESS-PROBLEM] Error during problem matching:', {
         error: matchError,
         message: matchError instanceof Error ? matchError.message : 'Unknown error',
         stack: matchError instanceof Error ? matchError.stack : undefined,
-        name: matchError instanceof Error ? matchError.name : undefined
+        name: matchError instanceof Error ? matchError.name : undefined,
+        isTimeout
       });
-      throw matchError;
+      
+      // If timeout, create fallback match result and continue
+      if (isTimeout) {
+        console.log('[PROCESS-PROBLEM] Matching timed out, using fallback result');
+        matchResult = {
+          status: 'opportunity',
+          message: 'Processing timed out while searching for solutions. Your problem has been saved and will be reviewed manually.'
+        };
+      } else {
+        throw matchError;
+      }
     }
     
     // Prepare insert data
@@ -263,20 +318,41 @@ export async function POST(request: NextRequest) {
       blocks.push({
         type: 'divider'
       });
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `🚀 *New Opportunity Identified!*\n\nNo existing tool solves this exact problem. This is a great opportunity for a new solution!`
-        }
-      });
-      blocks.push({
-        type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: `💡 *Next Steps:*\n• Research potential solutions\n• Evaluate feasibility\n• Add to development pipeline`
-        }
-      });
+      
+      // Check if this was a timeout case
+      const isTimeoutCase = matchResult.message?.includes('timed out');
+      
+      if (isTimeoutCase) {
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `⏱️ *Processing Timeout*\n\nYour problem has been saved, but the AI search timed out. We'll review it manually and get back to you!`
+          }
+        });
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `💡 *What happened:*\nThe search for solutions took longer than expected. Your problem is safely stored and will be reviewed by our team.`
+          }
+        });
+      } else {
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `🚀 *New Opportunity Identified!*\n\nNo existing tool solves this exact problem. This is a great opportunity for a new solution!`
+          }
+        });
+        blocks.push({
+          type: 'section',
+          text: {
+            type: 'mrkdwn',
+            text: `💡 *Next Steps:*\n• Research potential solutions\n• Evaluate feasibility\n• Add to development pipeline`
+          }
+        });
+      }
     }
 
     // Add footer with link to view all problems
@@ -338,14 +414,48 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({ success: true, problem: newProblem, match: matchResult });
   } catch (error) {
-    console.error('Error processing problem submission:', error);
-    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+    // Clear progress timeout if still pending
+    if (typeof progressTimeout !== 'undefined') {
+      clearTimeout(progressTimeout);
+    }
+    
+    console.error('[PROCESS-PROBLEM] Error processing problem submission:', error);
+    console.error('[PROCESS-PROBLEM] Error stack:', error instanceof Error ? error.stack : 'No stack');
     
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('Timeout');
+    
+    // Try to save problem even on error (if not already saved)
+    let problemSaved = false;
+    if (responseUrl && !isTimeout) {
+      try {
+        const supabase = await createClient();
+        const { data: savedProblem } = await supabase
+          .from('problems')
+          .insert({
+            description: problemDescription || 'Unknown problem',
+            status: 'pending',
+            matched_tool_id: null,
+          })
+          .select()
+          .single();
+        
+        if (savedProblem) {
+          problemSaved = true;
+          console.log('[PROCESS-PROBLEM] Problem saved as fallback despite error:', savedProblem.id);
+        }
+      } catch (saveError) {
+        console.error('[PROCESS-PROBLEM] Failed to save problem as fallback:', saveError);
+      }
+    }
     
     // Try to send error to Slack if responseUrl is available
     if (responseUrl) {
       try {
+        const errorText = isTimeout
+          ? `⏱️ *Processing Timeout*\n\nYour problem ${problemSaved ? 'has been saved' : 'could not be saved'} due to a timeout. Please try again or contact support.`
+          : `❌ *Error*\n\nAn error occurred while processing your problem: ${errorMessage}\n\n${problemSaved ? 'Your problem has been saved and will be reviewed manually.' : 'Please try again later.'}`;
+        
         await fetch(responseUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -356,19 +466,19 @@ export async function POST(request: NextRequest) {
                 type: 'section',
                 text: {
                   type: 'mrkdwn',
-                  text: `❌ *Error*\n\nAn error occurred while processing your problem: ${errorMessage}\n\nPlease try again later.`
+                  text: errorText
                 }
               }
             ]
           })
         });
       } catch (fetchError) {
-        console.error('Failed to send error response to Slack:', fetchError);
+        console.error('[PROCESS-PROBLEM] Failed to send error response to Slack:', fetchError);
       }
     }
     
     return NextResponse.json(
-      { success: false, error: errorMessage },
+      { success: false, error: errorMessage, problemSaved },
       { status: 500 }
     );
   }
