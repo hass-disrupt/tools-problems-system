@@ -1,35 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
+import { addTool } from '@/lib/tools/add-tool';
 
 /**
  * Process tool addition asynchronously and send result to Slack via response_url
  */
 async function processToolAddition(url: string, responseUrl: string) {
+  console.log('Starting async tool addition process for URL:', url);
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
-    const apiResponse = await fetch(`${baseUrl}/api/tools/add`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ url }),
-    });
+    // Call the internal function directly instead of HTTP request
+    const result = await addTool(url);
+    console.log('Tool addition result:', result.success ? 'Success' : 'Failed');
 
-    const apiData = await apiResponse.json();
-
-    if (!apiResponse.ok) {
+    if (!result.success) {
       // Handle different error types
       let errorMessage = 'Failed to add tool.';
       
-      if (apiData.error?.includes('rejected')) {
-        errorMessage = `❌ Tool rejected: ${apiData.reason || apiData.details || apiData.error}`;
-      } else if (apiData.error?.includes('already exists') || apiData.code === '23505') {
+      if (result.error?.includes('rejected')) {
+        errorMessage = `❌ Tool rejected: ${result.reason || result.details || result.error}`;
+      } else if (result.error?.includes('already exists') || result.code === '23505') {
         errorMessage = `⚠️ Tool already exists in the database.`;
       } else {
-        errorMessage = `❌ Error: ${apiData.error || apiData.details || 'Unknown error'}`;
+        errorMessage = `❌ Error: ${result.error || result.details || 'Unknown error'}`;
       }
 
-      await fetch(responseUrl, {
+      const slackResponse = await fetch(responseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -37,12 +32,18 @@ async function processToolAddition(url: string, responseUrl: string) {
           text: errorMessage
         })
       });
+      
+      if (!slackResponse.ok) {
+        console.error('Failed to send error response to Slack:', await slackResponse.text());
+      }
       return;
     }
 
     // Success response
-    const tool = apiData.tool;
-    await fetch(responseUrl, {
+    const tool = result.tool;
+    console.log('Sending success response to Slack via response_url');
+    
+    const slackResponse = await fetch(responseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -58,16 +59,27 @@ async function processToolAddition(url: string, responseUrl: string) {
         ]
       })
     });
+    
+    if (!slackResponse.ok) {
+      console.error('Failed to send response to Slack:', await slackResponse.text());
+    } else {
+      console.log('Successfully sent response to Slack');
+    }
   } catch (error) {
     console.error('Error processing tool addition:', error);
-    await fetch(responseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        response_type: 'ephemeral',
-        text: '❌ An error occurred while processing your tool. Please try again later.'
-      })
-    });
+    console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
+    try {
+      await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          text: `❌ An error occurred while processing your tool: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again later.`
+        })
+      });
+    } catch (fetchError) {
+      console.error('Failed to send error response to Slack:', fetchError);
+    }
   }
 }
 
@@ -155,17 +167,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Process asynchronously - don't await
-    processToolAddition(url, responseUrl).catch((error) => {
+    // Use void to explicitly mark as fire-and-forget
+    void processToolAddition(url, responseUrl).catch(async (error) => {
       console.error('Error in async tool processing:', error);
+      console.error('Error stack:', error instanceof Error ? error.stack : 'No stack');
       // Send error via response_url
-      fetch(responseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          response_type: 'ephemeral',
-          text: '❌ An error occurred while processing your tool. Please try again later.'
-        })
-      }).catch(console.error);
+      try {
+        await fetch(responseUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            response_type: 'ephemeral',
+            text: `❌ An error occurred while processing your tool: ${error instanceof Error ? error.message : 'Unknown error'}. Please try again later.`
+          })
+        });
+      } catch (fetchError) {
+        console.error('Failed to send error response to Slack:', fetchError);
+      }
     });
 
     // Return immediate response
