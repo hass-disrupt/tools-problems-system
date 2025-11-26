@@ -73,6 +73,18 @@ export default async function Home() {
             >
               View All Problems
             </Link>
+            <Link
+              href="/tools"
+              className="flex items-center justify-center px-6 py-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+            >
+              View All Tools
+            </Link>
+            <Link
+              href="/fine-tuning"
+              className="flex items-center justify-center px-6 py-3 bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-700 text-zinc-900 dark:text-zinc-50 rounded-lg font-medium hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-colors"
+            >
+              Fine-Tune Prompts
+            </Link>
           </div>
         </div>
 

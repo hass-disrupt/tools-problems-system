@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getPrompt, interpolatePrompt } from '@/lib/prompts/prompt-manager';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -43,40 +44,22 @@ export async function extractToolInfoFromUrl(url: string, websiteContent?: strin
     textContent = extractTextFromHtml(html);
   }
 
-  const prompt = `You are analyzing a website/tool at this URL: ${url}
-
-Website content (first 8000 chars):
-${textContent}
-
-Extract the following information about this tool/website. Be VERY SPECIFIC and PRECISE:
-
-1. **Title**: The exact name/title of the tool or website
-2. **Description**: A clear, concise description of what this tool does (2-3 sentences)
-3. **Tag**: A single relevant tag/keyword (e.g., "productivity", "design", "development", "marketing")
-4. **Category**: The primary category this tool belongs to (e.g., "Design Tools", "Development Tools", "Marketing", "Analytics")
-5. **Problem it solves**: Be HYPER SPECIFIC. What exact, precise problem does this tool solve? Not vague descriptions - be very specific about the exact problem. (e.g., "Converts Figma designs to React components automatically" not "helps with design")
-6. **Who can use this**: Be specific about the target audience (e.g., "React developers working with Figma", "Content creators needing video editing", "E-commerce store owners")
-
-Return ONLY a valid JSON object with these exact keys (no markdown, no code blocks):
-{
-  "title": "...",
-  "description": "...",
-  "tag": "...",
-  "category": "...",
-  "problem_solves": "...",
-  "who_can_use": "..."
-}`;
+  const promptConfig = await getPrompt('extract-tool-info');
+  const userPrompt = interpolatePrompt(promptConfig.user_prompt_template, {
+    url,
+    textContent,
+  });
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: 'You are a precise tool analyzer. Extract structured information from websites. Always return valid JSON only.',
+        content: promptConfig.system_prompt,
       },
       {
         role: 'user',
-        content: prompt,
+        content: userPrompt,
       },
     ],
     response_format: { type: 'json_object' },

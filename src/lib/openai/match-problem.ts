@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { getPrompt, interpolatePrompt } from '@/lib/prompts/prompt-manager';
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -27,31 +28,22 @@ export async function findSemanticMatches(
     .map((tool, idx) => `${idx + 1}. ${tool.title}: ${tool.problem_solves}`)
     .join('\n');
 
-  const prompt = `A user is facing this problem:
-
-"${problemDescription}"
-
-Here are existing tools in our database:
-${toolsList}
-
-Find tools that solve this EXACT problem or a very similar problem. Be HYPER SPECIFIC - only match if the tool solves the precise problem or a very closely related one.
-
-Return a JSON array of matching tool indices (1-based from the list above) that solve this problem. Only include tools that solve the EXACT problem or very similar problems. If no tools match precisely, return an empty array.
-
-Format: [1, 3, 5] (just the indices, no tool names)
-
-Return ONLY valid JSON array. No markdown, no code blocks, no explanations.`;
+  const promptConfig = await getPrompt('match-problem');
+  const userPrompt = interpolatePrompt(promptConfig.user_prompt_template, {
+    problemDescription,
+    toolsList,
+  });
 
   const completion = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
       {
         role: 'system',
-        content: 'You are a precise problem-solver matcher. Only match tools that solve the EXACT problem. Return valid JSON array only.',
+        content: promptConfig.system_prompt,
       },
       {
         role: 'user',
-        content: prompt,
+        content: userPrompt,
       },
     ],
     response_format: { type: 'json_object' },
