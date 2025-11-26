@@ -11,18 +11,33 @@ async function processProblemSubmission(
   userName?: string | null
 ) {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://tools-problems-system.vercel.app';
-    const apiResponse = await fetch(`${baseUrl}/api/problems/submit`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ description: problemDescription }),
-    });
+    console.log('Processing problem submission:', { problemDescription, userId, userName });
+    
+    // Use the actual API route directly instead of making an HTTP call
+    // This avoids potential issues with baseUrl configuration
+    const { matchProblemToTools } = await import('@/lib/matching/match-problem');
+    const { createClient } = await import('@/lib/supabase/server');
+    
+    const supabase = await createClient();
+    
+    // Run matching logic
+    const matchResult = await matchProblemToTools(problemDescription.trim());
+    
+    // Insert problem into database
+    const { data: newProblem, error: insertError } = await supabase
+      .from('problems')
+      .insert({
+        description: problemDescription.trim(),
+        status: matchResult.status === 'solved' ? 'solved' : 
+                matchResult.status === 'suggested' ? 'pending' : 
+                'opportunity',
+        matched_tool_id: matchResult.matchedToolId || null,
+      })
+      .select()
+      .single();
 
-    const apiData = await apiResponse.json();
-
-    if (!apiResponse.ok) {
+    if (insertError) {
+      console.error('Error inserting problem:', insertError);
       await fetch(responseUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -33,7 +48,7 @@ async function processProblemSubmission(
               type: 'section',
               text: {
                 type: 'mrkdwn',
-                text: `❌ *Error Processing Problem*\n\n${apiData.error || apiData.details || 'Failed to process problem'}`
+                text: `❌ *Error Processing Problem*\n\nFailed to save problem: ${insertError.message}`
               }
             }
           ]
@@ -42,8 +57,16 @@ async function processProblemSubmission(
       return;
     }
 
-    const matchResult = apiData.match;
+    const apiData = {
+      success: true,
+      problem: newProblem,
+      match: matchResult,
+    };
+
     const problemId = apiData.problem?.id;
+    const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || 
+      (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null) ||
+      'https://tools-problems-system.vercel.app';
     const problemsPageUrl = `${baseUrl}/problems`;
     
     // Build header block with user info
@@ -71,14 +94,18 @@ async function processProblemSubmission(
 
     // Handle different match results
     if (matchResult.status === 'solved' && apiData.problem?.matched_tool_id) {
-      // Fetch tool details if matched
-      const toolResponse = await fetch(`${baseUrl}/api/tools/search?q=&limit=100`);
-      const toolData = await toolResponse.json();
-      const matchedTool = toolData.tools?.find(
-        (t: any) => t.id === apiData.problem.matched_tool_id
-      );
+      // Fetch tool details directly from database
+      const { data: matchedTool, error: toolError } = await supabase
+        .from('tools')
+        .select('id, title, url, description, problem_solves, who_can_use')
+        .eq('id', apiData.problem.matched_tool_id)
+        .single();
+      
+      if (toolError) {
+        console.error('Error fetching matched tool:', toolError);
+      }
 
-      if (matchedTool) {
+      if (matchedTool && !toolError) {
         blocks.push({
           type: 'divider'
         });
@@ -178,7 +205,9 @@ async function processProblemSubmission(
       ]
     });
 
-    await fetch(responseUrl, {
+    console.log('Sending response to Slack:', { responseUrl, blocksCount: blocks.length });
+    
+    const slackResponse = await fetch(responseUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -186,24 +215,42 @@ async function processProblemSubmission(
         blocks
       })
     });
+
+    if (!slackResponse.ok) {
+      const errorText = await slackResponse.text();
+      console.error('Failed to send response to Slack:', {
+        status: slackResponse.status,
+        statusText: slackResponse.statusText,
+        body: errorText
+      });
+    } else {
+      console.log('Successfully sent response to Slack');
+    }
   } catch (error) {
     console.error('Error processing problem submission:', error);
-    await fetch(responseUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        response_type: 'ephemeral',
-        blocks: [
-          {
-            type: 'section',
-            text: {
-              type: 'mrkdwn',
-              text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    console.error('Error details:', errorMessage, error);
+    
+    try {
+      await fetch(responseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          response_type: 'ephemeral',
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `❌ *Error*\n\nAn error occurred while processing your problem: ${errorMessage}\n\nPlease try again later.`
+              }
             }
-          }
-        ]
-      })
-    });
+          ]
+        })
+      });
+    } catch (fetchError) {
+      console.error('Failed to send error response to Slack:', fetchError);
+    }
   }
 }
 
