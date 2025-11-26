@@ -57,6 +57,10 @@ export async function POST(request: NextRequest) {
     
     // Send progress update after 8 seconds if still processing
     progressTimeout = setTimeout(async () => {
+      if (!responseUrl) {
+        console.log('[PROCESS-PROBLEM] Skipping progress update - no responseUrl');
+        return;
+      }
       try {
         console.log('[PROCESS-PROBLEM] Sending progress update to Slack (processing taking longer than expected)');
         await fetch(responseUrl, {
