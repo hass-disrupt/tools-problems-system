@@ -7,6 +7,7 @@ import { verifySlackRequest } from '@/lib/slack/verify-request';
 async function processProblemSubmission(
   problemDescription: string,
   responseUrl: string,
+  userId?: string | null,
   userName?: string | null
 ) {
   try {
@@ -46,8 +47,8 @@ async function processProblemSubmission(
     const problemsPageUrl = `${baseUrl}/problems`;
     
     // Build header block with user info
-    const headerText = userName 
-      ? `*🔍 Problem Flagged by <@${userName}>*\n\n*Problem:*\n${problemDescription}`
+    const headerText = userId 
+      ? `*🔍 Problem Flagged by <@${userId}>${userName ? ` (${userName})` : ''}*\n\n*Problem:*\n${problemDescription}`
       : `*🔍 Problem Flagged*\n\n*Problem:*\n${problemDescription}`;
 
     const blocks: any[] = [
@@ -277,7 +278,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Process asynchronously - don't await
-    processProblemSubmission(problemDescription, responseUrl).catch((error) => {
+    processProblemSubmission(problemDescription, responseUrl, userId, userName).catch((error) => {
       console.error('Error in async problem processing:', error);
       // Send error via response_url
       fetch(responseUrl, {
@@ -285,7 +286,15 @@ export async function POST(request: NextRequest) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           response_type: 'ephemeral',
-          text: '❌ An error occurred while processing your problem. Please try again later.'
+          blocks: [
+            {
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: '❌ *Error*\n\nAn error occurred while processing your problem. Please try again later.'
+              }
+            }
+          ]
         })
       }).catch(console.error);
     });
