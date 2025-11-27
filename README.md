@@ -17,7 +17,20 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 1. Get your API key from [OpenAI](https://platform.openai.com/api-keys)
 2. Add it to your `.env.local` file
 
-### 3. Environment Variables
+### 3. Set up Slack App
+
+1. Create a new Slack app at [api.slack.com/apps](https://api.slack.com/apps)
+2. Configure your app:
+   - Go to **OAuth & Permissions** in the sidebar
+   - Add the following redirect URL: `https://your-domain.vercel.app/api/slack/oauth/callback`
+   - Under **Scopes**, add the bot scopes you need (e.g., `commands`, `chat:write`)
+   - Install the app to your workspace
+3. Get your credentials:
+   - **Client ID** and **Client Secret** from **Basic Information** → **App Credentials**
+   - **Bot User OAuth Token** from **OAuth & Permissions**
+   - **Signing Secret** from **Basic Information** → **App Credentials**
+
+### 4. Environment Variables
 
 Create a `.env.local` file in the root directory:
 
@@ -25,9 +38,15 @@ Create a `.env.local` file in the root directory:
 NEXT_PUBLIC_SUPABASE_URL=your_supabase_project_url
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key
 OPENAI_API_KEY=your_openai_api_key
+SLACK_CLIENT_ID=your_slack_client_id
+SLACK_CLIENT_SECRET=your_slack_client_secret
+SLACK_SIGNING_SECRET=your_slack_signing_secret
+SLACK_BOT_TOKEN=your_slack_bot_token
 ```
 
-### 4. Run the development server:
+**Important**: Also add these environment variables to your Vercel project settings for production deployments.
+
+### 5. Run the development server:
 
 ```bash
 npm run dev
@@ -68,6 +87,26 @@ This application allows you to:
 - `/` - Dashboard with recent tools and navigation
 - `/add-tool` - Form to add a new tool by URL
 - `/add-problem` - Form to submit a problem and find solutions
+
+## Slack Integration
+
+This project includes Slack app integration with OAuth support:
+
+- **OAuth Callback**: `src/app/api/slack/oauth/callback/route.ts` - Handles OAuth installation flow
+- **Slash Commands**: 
+  - `/problem` - Submit a problem and find matching tools
+  - `/addtool` - Add a new tool by URL
+- **Request Verification**: `src/lib/slack/verify-request.ts` - Verifies requests from Slack
+
+### Making Your App Available to Your Workspace
+
+1. Ensure your redirect URL is configured in Slack app settings:
+   ```
+   https://your-domain.vercel.app/api/slack/oauth/callback
+   ```
+2. Go to **Manage Distribution** in your Slack app settings
+3. Use the "Add to Slack" button or share the installation URL with your workspace
+4. Users will be redirected to the OAuth callback endpoint which handles the installation
 
 ## Supabase Integration
 
