@@ -218,12 +218,6 @@ Tell me what is slowing you down and I will help you fix it.`;
     } else {
       console.log('[EVENTS] User welcome status updated successfully:', userId);
     }
-
-    if (upsertError) {
-      console.error('[EVENTS] Failed to update user welcome status:', upsertError);
-    } else {
-      console.log('[EVENTS] User welcome status updated successfully:', userId);
-    }
   } catch (error) {
     console.error('[EVENTS] Error sending welcome message:', error);
   }
