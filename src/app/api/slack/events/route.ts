@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { verifySlackRequest } from '@/lib/slack/verify-request';
+import { createClient } from '@/lib/supabase/server';
 
 /**
  * Slack Event Subscriptions endpoint
@@ -56,8 +57,8 @@ export async function POST(request: NextRequest) {
           team: payload.team_id,
         });
 
-        // Send welcome message
-        await sendWelcomeMessage(event.user);
+        // Send welcome message (only if not already sent)
+        await sendWelcomeMessage(event.user, payload.team_id);
 
         // Acknowledge receipt immediately
         return NextResponse.json({ ok: true });
@@ -82,8 +83,9 @@ export async function POST(request: NextRequest) {
 
 /**
  * Sends the welcome message to a user when they open the app home
+ * Only sends once per user
  */
-async function sendWelcomeMessage(userId: string) {
+async function sendWelcomeMessage(userId: string, teamId: string) {
   const botToken = process.env.SLACK_BOT_TOKEN;
   
   if (!botToken) {
@@ -91,7 +93,30 @@ async function sendWelcomeMessage(userId: string) {
     return;
   }
 
-  const welcomeMessage = `:wave: Hey there, I am Gotafix
+  // Check if user has already received the welcome message
+  const supabase = await createClient();
+  
+  try {
+    // Check if user exists and has already received welcome message
+    const { data: existingUser, error: fetchError } = await supabase
+      .from('slack_users')
+      .select('welcome_message_sent')
+      .eq('slack_user_id', userId)
+      .eq('team_id', teamId)
+      .single();
+
+    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('[EVENTS] Error checking user status:', fetchError);
+      // Continue anyway - we'll try to send and update
+    }
+
+    // If user exists and has already received welcome message, skip
+    if (existingUser?.welcome_message_sent) {
+      console.log('[EVENTS] User has already received welcome message, skipping:', userId);
+      return;
+    }
+
+    const welcomeMessage = `:wave: Hey there, I am Gotafix
 
 I help you untangle everyday work problems and point you to the right tools fast.
 
@@ -117,7 +142,6 @@ I get smarter every time you talk to me.
 
 Tell me what is slowing you down and I will help you fix it.`;
 
-  try {
     // Open a DM conversation with the user
     const conversationResponse = await fetch('https://slack.com/api/conversations.open', {
       method: 'POST',
@@ -156,8 +180,49 @@ Tell me what is slowing you down and I will help you fix it.`;
 
     if (!messageData.ok) {
       console.error('[EVENTS] Failed to send welcome message:', messageData.error);
+      return;
+    }
+
+    console.log('[EVENTS] Welcome message sent successfully to user:', userId);
+
+    // Mark user as having received welcome message
+    // First try to update existing record
+    const { data: updatedUser, error: updateError } = await supabase
+      .from('slack_users')
+      .update({
+        welcome_message_sent: true,
+        welcome_message_sent_at: new Date().toISOString(),
+      })
+      .eq('slack_user_id', userId)
+      .eq('team_id', teamId)
+      .select();
+
+    // If no existing record, insert a new one
+    if (!updatedUser || updatedUser.length === 0) {
+      const { error: insertError } = await supabase
+        .from('slack_users')
+        .insert({
+          slack_user_id: userId,
+          team_id: teamId,
+          welcome_message_sent: true,
+          welcome_message_sent_at: new Date().toISOString(),
+        });
+
+      if (insertError) {
+        console.error('[EVENTS] Failed to insert user welcome status:', insertError);
+      } else {
+        console.log('[EVENTS] User welcome status inserted successfully:', userId);
+      }
+    } else if (updateError) {
+      console.error('[EVENTS] Failed to update user welcome status:', updateError);
     } else {
-      console.log('[EVENTS] Welcome message sent successfully to user:', userId);
+      console.log('[EVENTS] User welcome status updated successfully:', userId);
+    }
+
+    if (upsertError) {
+      console.error('[EVENTS] Failed to update user welcome status:', upsertError);
+    } else {
+      console.log('[EVENTS] User welcome status updated successfully:', userId);
     }
   } catch (error) {
     console.error('[EVENTS] Error sending welcome message:', error);
